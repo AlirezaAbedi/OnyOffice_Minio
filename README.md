@@ -1,4 +1,3 @@
-# OnyOffice_Minio
 # Online Document Editing Service
 
 A self-hosted online document editing service built with **FastAPI**, **ONLYOFFICE Document Server**, **MinIO**, and **Redis**.
