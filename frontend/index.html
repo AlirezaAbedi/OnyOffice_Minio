@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Editor</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            margin: 0;
+            height: 100%;
+            font-family: Arial, sans-serif;
+        }
+
+        body {
+            background: #f5f7fa;
+            color: #1f2937;
+        }
+
+        .topbar {
+            height: 64px;
+            background: #1f2937;
+            color: white;
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            gap: 18px;
+        }
+
+        .topbar h1 {
+            font-size: 20px;
+            margin: 0;
+        }
+
+        .container {
+            padding: 20px;
+            height: calc(100% - 64px);
+        }
+
+        .panel {
+            background: white;
+            border-radius: 10px;
+            padding: 18px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, .08);
+            margin-bottom: 16px;
+        }
+
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+
+        input[type=file],
+        input[type=text] {
+            padding: 9px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+        }
+
+        input[type=text] {
+            min-width: 300px;
+        }
+
+        button {
+            border: 0;
+            border-radius: 6px;
+            padding: 10px 16px;
+            cursor: pointer;
+            background: #2563eb;
+            color: white;
+        }
+
+        button.secondary {
+            background: #4b5563;
+        }
+
+        button:hover {
+            opacity: .9;
+        }
+
+        button:disabled {
+            opacity: .5;
+            cursor: not-allowed;
+        }
+
+        #status {
+            margin-top: 10px;
+            white-space: pre-wrap;
+        }
+
+        #editor-container {
+            display: none;
+            background: white;
+            height: calc(100vh - 180px);
+            min-height: 650px;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, .08);
+        }
+
+        #onlyoffice-editor {
+            width: 100%;
+            height: 100%;
+        }
+
+        .metadata {
+            font-size: 13px;
+            color: #6b7280;
+            margin-top: 8px;
+        }
+
+        .error {
+            color: #b91c1c;
+        }
+
+        .success {
+            color: #047857;
+        }
+
+        .warning {
+            color: #b45309;
+        }
+
+        .saving {
+            color: #2563eb;
+        }
+    </style>
+
+
+</head>
+
+<body>
+
+    <div class="topbar">
+        <h1>📄 Document Editor</h1>
+        <span id="filename"></span>
+    </div>
+
+    <div class="container">
+
+        <div class="panel">
+
+            <h2>Open Document</h2>
+
+            <div class="row">
+
+                <input id="file" type="file" accept=".doc,.docx,.xls,.xlsx,.ppt,.pptx" />
+
+                <button onclick="uploadDocument()">
+                    Upload to MinIO
+                </button>
+
+                <input id="documentId" type="text" placeholder="Document ID" />
+
+                <button class="secondary" onclick="openDocumentById()">
+                    Open Document
+                </button>
+
+                <button class="secondary" onclick="downloadDocument()">
+                    Download Current Document
+                </button>
+
+            </div>
+
+            <div id="status"></div>
+
+            <div id="metadata" class="metadata"></div>
+
+        </div>
+
+        <div id="editor-container">
+
+            <div id="onlyoffice-editor"></div>
+
+        </div>
+
+    </div>
+
+
+    <script>
+
+        // ============================================================
+        // GLOBAL VARIABLES
+        // ============================================================
+
+        let currentDocumentId = null;
+
+        let onlyOfficeEditor = null;
+
+        let autoSaveTimer = null;
+
+        let isAutoSaving = false;
+
+        // Auto-save interval.
+        // 30 seconds = 30000 milliseconds.
+        const AUTO_SAVE_INTERVAL = 30000;
+
+
+        // ============================================================
+        // STATUS
+        // ============================================================
+
+        function setStatus(message, type = '')
+        {
+            const el =
+                document.getElementById('status');
+
+            el.textContent = message;
+
+            el.className = type;
+        }
+
+
+        // ============================================================
+        // UPLOAD DOCUMENT
+        // ============================================================
+
+        async function uploadDocument()
+        {
+            const fileInput =
+                document.getElementById('file');
+
+            if (!fileInput.files.length)
+            {
+                setStatus(
+                    'Please select a document first.',
+                    'error'
+                );
+
+                return;
+            }
+
+            const form =
+                new FormData();
+
+            form.append(
+                'file',
+                fileInput.files[0]
+            );
+
+            try
+            {
+                setStatus(
+                    'Uploading...'
+                );
+
+                const response =
+                    await fetch(
+                        '/documents',
+                        {
+                            method: 'POST',
+                            body: form
+                        }
+                    );
+
+                const data =
+                    await response.json();
+
+                if (!response.ok)
+                {
+                    throw new Error(
+                        data.detail ||
+                        'Upload failed'
+                    );
+                }
+
+                currentDocumentId =
+                    data.document_id;
+
+                document.getElementById(
+                    'documentId'
+                ).value =
+                    currentDocumentId;
+
+                setStatus(
+                    `Uploaded successfully.\nDocument ID: ${currentDocumentId}`,
+                    'success'
+                );
+
+                showMetadata(data);
+
+                await openDocument(
+                    currentDocumentId
+                );
+
+            }
+            catch (error)
+            {
+                console.error(
+                    'Upload error:',
+                    error
+                );
+
+                setStatus(
+                    error.message,
+                    'error'
+                );
+            }
+        }
+
+
+        // ============================================================
+        // OPEN DOCUMENT BY ID
+        // ============================================================
+
+        async function openDocumentById()
+        {
+            const id =
+                document
+                    .getElementById('documentId')
+                    .value
+                    .trim();
+
+            if (!id)
+            {
+                setStatus(
+                    'Enter a document ID.',
+                    'error'
+                );
+
+                return;
+            }
+
+            await openDocument(id);
+        }
+
+
+        // ============================================================
+        // OPEN DOCUMENT
+        // ============================================================
+
+        async function openDocument(id)
+        {
+            try
+            {
+                // Stop previous auto-save timer.
+                stopAutoSave();
+
+                // Destroy previous editor.
+                destroyOnlyOfficeEditor();
+
+                setStatus(
+                    'Loading document...'
+                );
+
+                // ----------------------------------------------------
+                // Get document metadata
+                // ----------------------------------------------------
+
+                const infoResponse =
+                    await fetch(
+                        `/documents/${encodeURIComponent(id)}`
+                    );
+
+                const info =
+                    await infoResponse.json();
+
+                if (!infoResponse.ok)
+                {
+                    throw new Error(
+                        info.detail ||
+                        'Document not found'
+                    );
+                }
+
+
+                // ----------------------------------------------------
+                // Get ONLYOFFICE configuration
+                // ----------------------------------------------------
+
+                const configResponse =
+                    await fetch(
+                        `/documents/${encodeURIComponent(id)}/edit`
+                    );
+
+                const config =
+                    await configResponse.json();
+
+                if (!configResponse.ok)
+                {
+                    throw new Error(
+                        config.detail ||
+                        'Could not create ONLYOFFICE configuration'
+                    );
+                }
+
+
+                // ----------------------------------------------------
+                // Store current document
+                // ----------------------------------------------------
+
+                currentDocumentId = id;
+
+                document.getElementById(
+                    'documentId'
+                ).value = id;
+
+
+                // ----------------------------------------------------
+                // Display metadata
+                // ----------------------------------------------------
+
+                showMetadata(info);
+
+
+                // ----------------------------------------------------
+                // Show editor
+                // ----------------------------------------------------
+
+                document.getElementById(
+                    'editor-container'
+                ).style.display = 'block';
+
+
+                setStatus(
+                    'Loading ONLYOFFICE...',
+                    'saving'
+                );
+
+
+                // ----------------------------------------------------
+                // Load ONLYOFFICE
+                // ----------------------------------------------------
+
+                await loadOnlyOffice(config);
+
+
+                // ----------------------------------------------------
+                // Start automatic synchronization
+                // ----------------------------------------------------
+
+                startAutoSave();
+
+
+                setStatus(
+                    'Document opened. Automatic synchronization is enabled.',
+                    'success'
+                );
+
+            }
+            catch (error)
+            {
+                console.error(
+                    'Open document error:',
+                    error
+                );
+
+                setStatus(
+                    error.message,
+                    'error'
+                );
+            }
+        }
+
+
+        // ============================================================
+        // DISPLAY METADATA
+        // ============================================================
+
+        function showMetadata(info)
+        {
+            document.getElementById(
+                'filename'
+            ).textContent =
+                info.filename || '';
+
+            document.getElementById(
+                'metadata'
+            ).textContent =
+                `ID: ${info.document_id} | ` +
+                `Version: ${info.version} | ` +
+                `S3: ${info.bucket}/${info.s3_key}`;
+        }
+
+
+        // ============================================================
+        // LOAD ONLYOFFICE JAVASCRIPT API
+        // ============================================================
+
+        function loadOnlyOffice(config)
+        {
+            return new Promise(
+                (resolve, reject) =>
+                {
+                    if (window.DocsAPI)
+                    {
+                        try
+                        {
+                            renderOnlyOffice(config);
+
+                            resolve();
+                        }
+                        catch (error)
+                        {
+                            reject(error);
+                        }
+
+                        return;
+                    }
+
+
+                    const script =
+                        document.createElement(
+                            'script'
+                        );
+
+                    script.src =
+                        'http://localhost:8080/web-apps/apps/api/documents/api.js';
+
+
+                    script.onload = () =>
+                    {
+                        try
+                        {
+                            renderOnlyOffice(
+                                config
+                            );
+
+                            resolve();
+
+                        }
+                        catch (error)
+                        {
+                            reject(error);
+                        }
+                    };
+
+
+                    script.onerror = () =>
+                    {
+                        reject(
+                            new Error(
+                                'Could not load ONLYOFFICE JavaScript API.'
+                            )
+                        );
+                    };
+
+
+                    document.head.appendChild(
+                        script
+                    );
+                }
+            );
+        }
+
+
+        // ============================================================
+        // CREATE ONLYOFFICE EDITOR
+        // ============================================================
+
+        function renderOnlyOffice(config)
+        {
+            const container =
+                document.getElementById(
+                    'onlyoffice-editor'
+                );
+
+            container.innerHTML = '';
+
+
+            // --------------------------------------------------------
+            // Add ONLYOFFICE event handlers
+            // --------------------------------------------------------
+
+            config.events = {
+
+                onDocumentReady: function ()
+                {
+                    console.log(
+                        'ONLYOFFICE: document ready'
+                    );
+
+                    setStatus(
+                        'Document ready. Auto-save is active.',
+                        'success'
+                    );
+                },
+
+
+                onError: function (event)
+                {
+                    console.error(
+                        'ONLYOFFICE error:',
+                        event
+                    );
+
+                    setStatus(
+                        'ONLYOFFICE error. Check browser console.',
+                        'error'
+                    );
+                },
+
+
+                onRequestClose: function ()
+                {
+                    console.log(
+                        'ONLYOFFICE: close requested'
+                    );
+
+                    stopAutoSave();
+                }
+            };
+
+
+            // --------------------------------------------------------
+            // Create editor
+            // --------------------------------------------------------
+
+            onlyOfficeEditor =
+                new DocsAPI.DocEditor(
+                    'onlyoffice-editor',
+                    config
+                );
+
+
+            console.log(
+                'ONLYOFFICE editor created'
+            );
+
+            console.log(
+                'Document key:',
+                config.document.key
+            );
+        }
+
+
+        // ============================================================
+        // AUTO SAVE
+        // ============================================================
+
+        function startAutoSave()
+        {
+            // Prevent duplicate timers.
+            stopAutoSave();
+
+
+            console.log(
+                `Auto-save started. Interval: ${AUTO_SAVE_INTERVAL} ms`
+            );
+
+
+            autoSaveTimer =
+                setInterval(
+                    async function ()
+                    {
+                        await forceSaveDocument();
+
+                    },
+                    AUTO_SAVE_INTERVAL
+                );
+        }
+
+
+        // ============================================================
+        // STOP AUTO SAVE
+        // ============================================================
+
+        function stopAutoSave()
+        {
+            if (autoSaveTimer !== null)
+            {
+                clearInterval(
+                    autoSaveTimer
+                );
+
+                autoSaveTimer = null;
+
+                console.log(
+                    'Auto-save stopped'
+                );
+            }
+        }
+
+
+        // ============================================================
+        // FORCE SAVE
+        // ============================================================
+
+        async function forceSaveDocument()
+        {
+            if (!currentDocumentId)
+            {
+                console.log(
+                    'No document is open.'
+                );
+
+                return;
+            }
+
+
+            // Prevent overlapping force-save requests.
+            if (isAutoSaving)
+            {
+                console.log(
+                    'Previous auto-save is still running.'
+                );
+
+                return;
+            }
+
+
+            isAutoSaving = true;
+
+
+            try
+            {
+                console.log(
+                    'Requesting ONLYOFFICE force-save...'
+                );
+
+
+                setStatus(
+                    'Synchronizing document...',
+                    'saving'
+                );
+
+
+                // ----------------------------------------------------
+                // Call Python backend
+                // ----------------------------------------------------
+
+                const response =
+                    await fetch(
+                        `/documents/${encodeURIComponent(currentDocumentId)}/force-save`,
+                        {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type':
+                                    'application/json'
+                            }
+                        }
+                    );
+
+
+                const result =
+                    await response.json();
+
+
+                console.log(
+                    'Force-save response:',
+                    result
+                );
+
+
+                if (!response.ok)
+                {
+                    throw new Error(
+                        result.detail ||
+                        'Force-save request failed'
+                    );
+                }
+
+
+                // ----------------------------------------------------
+                // IMPORTANT
+                //
+                // Your backend may return:
+                //
+                // {
+                //     "result": {
+                //         "error": 0
+                //     }
+                // }
+                //
+                // or:
+                //
+                // {
+                //     "result": {
+                //         "error": 1
+                //     }
+                // }
+                // ----------------------------------------------------
+
+                const commandResult =
+                    result.result;
+
+
+                if (
+                    commandResult &&
+                    commandResult.error !== undefined
+                )
+                {
+                    if (
+                        commandResult.error !== 0
+                    )
+                    {
+                        throw new Error(
+                            `ONLYOFFICE force-save returned error: ${commandResult.error}`
+                        );
+                    }
+                }
+
+
+                setStatus(
+                    'Force-save requested. Waiting for ONLYOFFICE callback...',
+                    'saving'
+                );
+
+
+                /*
+                 * IMPORTANT:
+                 *
+                 * This does NOT mean MinIO has already been updated.
+                 *
+                 * ONLYOFFICE first accepts the force-save command.
+                 *
+                 * Then ONLYOFFICE calls:
+                 *
+                 * POST /onlyoffice/callback/{documentId}
+                 *
+                 * Your Python callback downloads the DOCX
+                 * and overwrites MinIO.
+                 */
+
+
+            }
+            catch (error)
+            {
+                console.error(
+                    'Auto-save error:',
+                    error
+                );
+
+
+                setStatus(
+                    `Auto-save failed: ${error.message}`,
+                    'error'
+                );
+            }
+            finally
+            {
+                isAutoSaving = false;
+            }
+        }
+
+
+        // ============================================================
+        // DOWNLOAD CURRENT DOCUMENT
+        // ============================================================
+
+        async function downloadDocument()
+        {
+            if (!currentDocumentId)
+            {
+                setStatus(
+                    'Open a document first.',
+                    'error'
+                );
+
+                return;
+            }
+
+
+            // Ask backend to return the current MinIO object.
+            window.location.href =
+                `/documents/${encodeURIComponent(currentDocumentId)}/download`;
+        }
+
+
+        // ============================================================
+        // DESTROY ONLYOFFICE EDITOR
+        // ============================================================
+
+        function destroyOnlyOfficeEditor()
+        {
+            if (onlyOfficeEditor)
+            {
+                try
+                {
+                    onlyOfficeEditor.destroyEditor();
+                }
+                catch (error)
+                {
+                    console.warn(
+                        'Could not destroy ONLYOFFICE editor:',
+                        error
+                    );
+                }
+
+                onlyOfficeEditor = null;
+            }
+
+
+            const container =
+                document.getElementById(
+                    'onlyoffice-editor'
+                );
+
+            if (container)
+            {
+                container.innerHTML = '';
+            }
+        }
+
+
+        // ============================================================
+        // PAGE CLOSE
+        // ============================================================
+
+        window.addEventListener(
+            'beforeunload',
+            function ()
+            {
+                stopAutoSave();
+            }
+        );
+
+    </script>
+
+</body>
+
+</html>

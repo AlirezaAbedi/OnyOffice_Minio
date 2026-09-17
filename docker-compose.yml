@@ -1,0 +1,63 @@
+services:
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: document-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: document-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    container_name: document-onlyoffice
+    ports:
+      - "8080:80"
+    environment:
+      JWT_ENABLED: "false"
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - onlyoffice_data:/var/www/onlyoffice/Data
+
+  api:
+    build: .
+    container_name: document-api
+    ports:
+      - "8000:8000"
+    environment:
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      MINIO_BUCKET: documents
+      MINIO_SECURE: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      INTERNAL_API_URL: http://api:8000
+      PUBLIC_API_URL: http://localhost:8000
+      ONLYOFFICE_URL: http://onlyoffice
+    
+    depends_on:
+      - minio
+      - redis
+      - onlyoffice
+
+volumes:
+  minio_data:
+  redis_data:
+  onlyoffice_data:
